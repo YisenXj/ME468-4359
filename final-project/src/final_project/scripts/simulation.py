@@ -6,13 +6,14 @@ from rclpy.task import Future
 from custom_msgs.msg import VehicleState, VehicleInput
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path
-# from cv_bridge import CvBridge
+from cv_bridge import CvBridge
 from rosgraph_msgs.msg import Clock
 from sensor_msgs.msg import Image, NavSatFix, Imu, MagneticField, PointCloud2
 from builtin_interfaces.msg import Time
 
 from ament_index_python.packages import get_package_share_directory
 
+import cv2
 import pychrono as chrono
 import pychrono.sensor as sens
 import pychrono.vehicle as veh
@@ -43,8 +44,8 @@ class SimulationNode(Node):
         self.declare_parameter('save_training_data', False)
         self.save_training_data = self.get_parameter(
             'save_training_data').get_parameter_value().bool_value
-
-        self.declare_parameter('visualize', False)
+       
+        self.declare_parameter('visualize', True)
         self.visualize = self.get_parameter(
             'visualize').get_parameter_value().bool_value
 
@@ -52,7 +53,7 @@ class SimulationNode(Node):
         self.save = self.get_parameter(
             'save').get_parameter_value().bool_value
 
-        self.declare_parameter('sensors', False)
+        self.declare_parameter('sensors', True)
         self.sensors = self.get_parameter(
             'sensors').get_parameter_value().bool_value
 
@@ -94,7 +95,7 @@ class SimulationNode(Node):
             'save_name').get_parameter_value().string_value
 
         home_dir = os.getenv('HOME')
-        save_dir = "me468_output"
+        save_dir = "final_output"
         if(not os.path.exists(os.path.join(home_dir,save_dir))):
             os.mkdir(os.path.join(home_dir,save_dir))
 
@@ -125,7 +126,7 @@ class SimulationNode(Node):
 
         # publish frequencies
         self.clock_frequency = 100.0
-        self.camera_frequency = 10.0
+        self.camera_frequency = 20.0
         self.mag_frequency = 50.0
         self.gps_frequency = 10.0
         self.state_frequency = 10.0
@@ -136,6 +137,7 @@ class SimulationNode(Node):
 
         self.clock_interval = np.round(
             1 / self.step_size / self.clock_frequency)
+        #print("clock interval !!!!!!!!",self.clock_interval)
         self.camera_interval = np.round(
             1 / self.step_size / self.camera_frequency)
         self.mag_interval = np.round(1 / self.step_size / self.mag_frequency)
@@ -157,16 +159,24 @@ class SimulationNode(Node):
         # publishers
         self.pub_clock = self.create_publisher(Clock, 'clock', 10)
         if(self.sensors):
-            # self.pub_image = self.create_publisher(Image, 'image', 10)
+            self.pub_image1 = self.create_publisher(Image, 'image_left', 20)
+            self.pub_image2 = self.create_publisher(Image, 'image_right', 20)
             self.pub_gps = self.create_publisher(NavSatFix, 'gps', 10)
             self.pub_mag = self.create_publisher(MagneticField, 'magnetic', 10)
             self.pub_lidar = self.create_publisher(PointCloud2, 'lidar', 10)
         self.pub_state = self.create_publisher(VehicleState, 'state', 10)
 
-        # self.bridge = CvBridge()
-
+        self.bridge = CvBridge()
+        
+        #wait slam to be ready
+        #self.declare_parameter('slam_ready',0)
+        #self.slam_ready=self.get_parameter('slam_ready').get_parameter_value().integer_value
+        #while self.slam_ready==0:
+        #    print("Waiting for slam")
+        #    time.sleep(2)
+        #    self.slam_ready=self.get_parameter('slam_ready').get_parameter_value().integer_value
         # timers
-        self.timer = self.create_timer(self.step_size, self.step_simulation)
+        self.timer = self.create_timer(self.step_size, self.step_simulation)  #self.step_size
 
         self.output_data = []
 
@@ -213,8 +223,7 @@ class SimulationNode(Node):
                                           0, 0, 0), chrono.ChVectorD(0, 0, 1),
                                       self.terrainLength, self.terrainWidth)
         self.terrain.Initialize()
-        visual_asset = chrono.CastToChVisualization(
-            patch.GetGroundBody().GetAssets()[0])
+        visual_asset = chrono.CastToChVisualization(  patch.GetGroundBody().GetAssets()[0])
         vis_mat = chrono.ChVisualMaterial()
         vis_mat.SetKdTexture(veh.GetDataFile("terrain/textures/grass.jpg"))
         vis_mat.SetSpecularColor(chrono.ChVectorF(.0, .0, .0))
@@ -234,8 +243,10 @@ class SimulationNode(Node):
             self.vehicle.InitializeTire(tireR, axle.m_wheels[1], veh.VisualizationType_MESH)
 
         # #create the driver
-        self.driver = veh.ChDriver(self.vehicle)
-        self.driver.Initialize()
+        DriverDataPath="/home/yisen/final/data/DriverData.txt"
+        self.driver = veh.ChDataDriver(self.vehicle,DriverDataPath)
+        #self.driver = veh.ChDriver(self.vehicle)
+        #self.driver.Initialize()
 
         # initialize sensor system
         if(self.sensors):
@@ -277,46 +288,66 @@ class SimulationNode(Node):
             # Add the imu to the sensor manager
             self.manager.AddSensor(self.magnetometer)
 
-            # create camera on vehicle hood
+            # create camera1 on vehicle
             cam_offset_pose = chrono.ChFrameD(chrono.ChVectorD(
-                1, 0, .875), chrono.ChQuaternionD(1,0,0,0))
-            self.camera = sens.ChCameraSensor(
+                1, -0.5, 1.0), chrono.ChQuaternionD(1,0,0,0))
+            self.camera1 = sens.ChCameraSensor(
                 self.vehicle.GetChassisBody(),  # body camera is attached to
-                10.0,                             # update rate in Hz
+                20.0,                             # update rate in Hz
                 cam_offset_pose,                    # offset pose
                 1280,                           # image width
                 720,                            # image height
                 3.14/4                          # camera's horizontal field of view
             )
             if(self.visualize):
-                self.camera.PushFilter(sens.ChFilterVisualize(640, 360, "Camera"))
-            # if(self.save):
-            #     if(not os.path.exists(os.path.join(self.output_dir,"camera1/"))):
-            #         os.mkdir(os.path.join(self.output_dir,"camera1/"))
-            #     self.camera.PushFilter(sens.ChFilterSave(os.path.join(self.output_dir,"camera1/")))
-            self.camera.PushFilter(sens.ChFilterRGBA8Access())
-            self.manager.AddSensor(self.camera)
+                self.camera1.PushFilter(sens.ChFilterVisualize(640, 360, "Camera"))
+            if(self.save):
+                if(not os.path.exists(os.path.join(self.output_dir,"LEFT/"))):
+                     os.mkdir(os.path.join(self.output_dir,"LEFT/"))
+                self.camera1.PushFilter(sens.ChFilterSave(os.path.join(self.output_dir,"LEFT/")))
+            self.camera1.PushFilter(sens.ChFilterRGBA8Access())
+            self.manager.AddSensor(self.camera1)
+
+            cam_offset_pose = chrono.ChFrameD(chrono.ChVectorD(
+                1, 0.5, 1.0), chrono.ChQuaternionD(1,0,0,0))
+            self.camera2 = sens.ChCameraSensor(
+                self.vehicle.GetChassisBody(),  # body camera is attached to
+                20.0,                             # update rate in Hz
+                cam_offset_pose,                    # offset pose
+                1280,                           # image width
+                720,                            # image height
+                3.14/4                          # camera's horizontal field of view
+            )
+            if(self.visualize):
+                self.camera2.PushFilter(sens.ChFilterVisualize(640, 360, "Camera"))
+            if(self.save):
+                if(not os.path.exists(os.path.join(self.output_dir,"RIGHT/"))):
+                    os.mkdir(os.path.join(self.output_dir,"RIGHT/"))
+                self.camera2.PushFilter(sens.ChFilterSave(os.path.join(self.output_dir,"RIGHT/")))
+            self.camera2.PushFilter(sens.ChFilterRGBA8Access())
+            self.manager.AddSensor(self.camera2)
+
 
             #create lidar at same location as camera
-            self.lidar = sens.ChLidarSensor(
-                self.vehicle.GetChassisBody(),                  # body lidar is attached to
-                10,      # scanning rate in Hz
-                cam_offset_pose,            # offset pose
-                1000,     # number of horizontal samples
-                32,       # number of vertical channels
-                chrono.CH_C_PI,         # horizontal field of view
-                .0,
-                -.26,           # vertical field of view
-                100)
-            self.lidar.PushFilter(sens.ChFilterPCfromDepth())
-            if(self.visualize):
-                self.lidar.PushFilter(sens.ChFilterVisualizePointCloud(640, 480, 1.0, "Lidar Point Cloud"))
-            # if(self.save):
-            #     if(not os.path.exists(os.path.join(self.output_dir,"lidar/"))):
-            #         os.mkdir(os.path.join(self.output_dir,"lidar/"))
-            #     self.lidar.PushFilter(sens.ChFilterSavePtCloud(os.path.join(self.output_dir,"lidar/")))
-            self.lidar.PushFilter(sens.ChFilterXYZIAccess())
-            self.manager.AddSensor(self.lidar)
+#            self.lidar = sens.ChLidarSensor(
+#                self.vehicle.GetChassisBody(),                  # body lidar is attached to
+#                10,      # scanning rate in Hz
+#                cam_offset_pose,            # offset pose
+#                1000,     # number of horizontal samples
+#                32,       # number of vertical channels
+#                chrono.CH_C_PI,         # horizontal field of view
+#                .0,
+#                -.26,           # vertical field of view
+#                100)
+#            self.lidar.PushFilter(sens.ChFilterPCfromDepth())
+#            if(self.visualize):
+#                self.lidar.PushFilter(sens.ChFilterVisualizePointCloud(640, 480, 1.0, "Lidar Point Cloud"))
+#            # if(self.save):
+#            #     if(not os.path.exists(os.path.join(self.output_dir,"lidar/"))):
+#            #         os.mkdir(os.path.join(self.output_dir,"lidar/"))
+#            #     self.lidar.PushFilter(sens.ChFilterSavePtCloud(os.path.join(self.output_dir,"lidar/")))
+#            self.lidar.PushFilter(sens.ChFilterXYZIAccess())
+#            self.manager.AddSensor(self.lidar)
 
             # create third person camera
             cam_offset_pose2 = chrono.ChFrameD(chrono.ChVectorD(
@@ -351,11 +382,11 @@ class SimulationNode(Node):
                               chrono.GetChronoDataFile("sensor/offroad/rock4.obj"))
         self.AddAssetRandomly(int(self.random_object_count/5),
                               chrono.GetChronoDataFile("sensor/offroad/rock5.obj"))
-
+        
         # add objects from file if specified
         if(self.object_location_file != ""):
             self.AddAssetsFromFile(self.object_location_file)
-
+        #self.AddPanel()
         # construct scene and label rocks for generating training data
         if(self.sensors):
             self.manager.ReconstructScenes()
@@ -370,13 +401,16 @@ class SimulationNode(Node):
 
         # Collect output data from modules (for inter-module communication)
         driver_inputs = self.driver.GetInputs()
-        driver_inputs.m_throttle = self.throttle
-        driver_inputs.m_braking = self.braking
-        driver_inputs.m_steering = self.steering
+        #driver_inputs.m_throttle = self.throttle
+        #driver_inputs.m_braking = self.braking
+        #driver_inputs.m_steering = self.steering
 
         # Update modules (process inputs from other modules)
         t = self.vehicle.GetSystem().GetChTime()
 
+        self.seconds = int(t)
+        self.nanoseconds = int((t - self.seconds) * 1e9)
+        
         if(t > self.max_duration or (self.target_location-pos).Length() < 10.0):
             self.future.set_result(None)
 
@@ -415,14 +449,15 @@ class SimulationNode(Node):
         if(self.sim_step % self.clock_interval == 0):
             self.publish_clock()
         if(self.sensors):
-            # if(self.sim_step % self.camera_interval == 0):
-            #     self.publish_camera()
+            if(self.sim_step % self.camera_interval == 0):
+                self.publish_camera1()
+                self.publish_camera2()
             if(self.sim_step % self.mag_interval == 0):
                 self.publish_mag()
             if(self.sim_step % self.gps_interval == 0):
                 self.publish_gps()
-            if(self.sim_step % self.lidar_interval == 0):
-                self.publish_lidar()
+            #if(self.sim_step % self.lidar_interval == 0):
+            #    self.publish_lidar()
         if(self.publish_state_directly and (self.sim_step % self.state_interval == 0)):
             self.publish_state()
         t3 = time.time()
@@ -468,29 +503,42 @@ class SimulationNode(Node):
             self.vehicle.GetSystem().Add(mesh_body)
 
     def AddAssetsFromFile(self, filename):
-        file_path = os.path.join(self.package_share_directory, filename)
-
+        #file_path = os.path.join(self.package_share_directory, filename)
+        file_path=filename
         if(not os.path.exists(file_path)):
             self.get_logger().info("Object location file not found: '%s'" % (str(file_path)))
             exit(1)
 
         objects = np.loadtxt(file_path, delimiter=',')
 
-        mesh_file = chrono.GetChronoDataFile("sensor/offroad/rock1.obj")
-        mmesh = chrono.ChTriangleMeshConnected()
-        mmesh.LoadWavefrontMesh(mesh_file, False, True)
-        mmesh.Transform(chrono.ChVectorD(0, 0, 0), chrono.ChMatrix33D(1))
+        mesh_file1 = chrono.GetChronoDataFile("sensor/offroad/tree1.obj")
+        mmesh1 = chrono.ChTriangleMeshConnected()
+        mmesh1.LoadWavefrontMesh(mesh_file1, False, True)
+        mmesh1.Transform(chrono.ChVectorD(0, 0, 0), chrono.ChMatrix33D(1))
 
+        mesh_file2 = chrono.GetChronoDataFile("sensor/offroad/rock1.obj")
+        mmesh2 = chrono.ChTriangleMeshConnected()
+        mmesh2.LoadWavefrontMesh(mesh_file2, False, True)
+        mmesh2.Transform(chrono.ChVectorD(0, 0, 0), chrono.ChMatrix33D(1))
+        
+        mmesh_list=[mmesh1,mmesh2]
         for i in range(len(objects)):
             pos = chrono.ChVectorD(objects[i, 0], objects[i, 1], 0.0)
-            rot = chrono.Q_from_Euler123(chrono.ChVectorD(chrono.CH_C_2PI * chrono.ChRandom(
-            ), chrono.CH_C_2PI * chrono.ChRandom(), chrono.CH_C_2PI * chrono.ChRandom()))
-            scale = chrono.ChVectorD(
-                chrono.ChRandom() + .5, chrono.ChRandom() + .5, chrono.ChRandom() + .5)
             trimesh_shape = chrono.ChTriangleMeshShape()
-            trimesh_shape.SetMesh(mmesh)
-            trimesh_shape.SetName(mesh_file)
+            trimesh_shape.SetMesh(mmesh_list[i % 2])
+            trimesh_shape.SetName(mesh_file1)
             trimesh_shape.SetStatic(True)
+            if i%2 ==1:
+                scale = chrono.ChVectorD(chrono.ChRandom() + .5, chrono.ChRandom() + .5, 
+                                         chrono.ChRandom() + .5)
+                rot = chrono.Q_from_Euler123(chrono.ChVectorD(chrono.CH_C_2PI * chrono.ChRandom(), 
+                                             chrono.CH_C_2PI * chrono.ChRandom(), 
+                                             chrono.CH_C_2PI * chrono.ChRandom()))
+            else:
+                scale = chrono.ChVectorD(chrono.ChRandom() + 1.1, chrono.ChRandom() + 1.1, 
+                                         chrono.ChRandom() + 1.1) 
+                rot = chrono.Q_from_AngZ(chrono.CH_C_2PI * chrono.ChRandom())
+                
             trimesh_shape.SetScale(scale)
             self.rock_assets.append(trimesh_shape)
             mesh_body = chrono.ChBody()
@@ -499,6 +547,29 @@ class SimulationNode(Node):
             mesh_body.AddAsset(trimesh_shape)
             mesh_body.SetBodyFixed(True)
             self.vehicle.GetSystem().Add(mesh_body)
+    def AddPanel(self):
+        #file_path = os.path.join(self.package_share_directory, filename)geometries/colorchechker.obj
+        mesh_file = chrono.GetChronoDataFile("sensor/geometries/colorchecker.obj")
+        mesh_file = "/home/yisen/final/data/chess_board.obj"
+        mmesh = chrono.ChTriangleMeshConnected()
+        mmesh.LoadWavefrontMesh(mesh_file, False, True)
+        mmesh.Transform(chrono.ChVectorD(0, 0, 0), chrono.ChMatrix33D(1))
+
+        pos = chrono.ChVectorD(-115.0,0.0, 1.5)
+        rot = chrono.Q_from_AngY(-chrono.CH_C_2PI/4)
+        scale = chrono.ChVectorD(0.035,0.035,0.035)
+        trimesh_shape = chrono.ChTriangleMeshShape()
+        trimesh_shape.SetMesh(mmesh)
+        trimesh_shape.SetName(mesh_file)
+        trimesh_shape.SetStatic(True)
+        trimesh_shape.SetScale(scale)
+        self.rock_assets.append(trimesh_shape)
+        mesh_body = chrono.ChBody()
+        mesh_body.SetPos(pos)
+        mesh_body.SetRot(rot)
+        mesh_body.AddAsset(trimesh_shape)
+        mesh_body.SetBodyFixed(True)
+        self.vehicle.GetSystem().Add(mesh_body)
 
     def LabelRockAssets(self):
         rock_id = 0
@@ -538,14 +609,32 @@ class SimulationNode(Node):
         msg.clock = Time()
         msg.clock.nanosec = nanoseconds
         msg.clock.sec = seconds
+        #print("Time!!!!!!!",msg.clock.sec %100 + msg.clock.nanosec*10e-9)
         self.pub_clock.publish(msg)
 
-    # def publish_camera(self):
-    #     pass
-        # if(self.camera and self.camera.GetMostRecentRGBA8Buffer().HasData()):
-        #     img = self.camera.GetMostRecentRGBA8Buffer().GetRGBA8Data()
-        #     msg = self.bridge.cv2_to_imgmsg(img, "rgba8")
-        #     self.pub_image.publish(msg)
+    def publish_camera1(self):
+        if(self.camera1 and self.camera1.GetMostRecentRGBA8Buffer().HasData()):
+            img_raw = self.camera1.GetMostRecentRGBA8Buffer().GetRGBA8Data()
+            img= cv2.rotate(img_raw,cv2.ROTATE_180)
+            img=cv2.flip(img,1)
+            msg = self.bridge.cv2_to_imgmsg(img, "rgba8")
+            msg.header.stamp.sec=self.seconds;
+            msg.header.stamp.nanosec=self.nanoseconds;
+            #self.get_logger().info("Camera time: " +str( self.seconds + self.nanoseconds*1e-9))
+            #print("Camera time: " +str( self.seconds + self.nanoseconds*1e-9))
+            self.pub_image1.publish(msg)
+    def publish_camera2(self):
+        if (self.camera2 and self.camera2.GetMostRecentRGBA8Buffer().HasData()):
+            img_raw = self.camera2.GetMostRecentRGBA8Buffer().GetRGBA8Data()
+            img=cv2.rotate(img_raw,cv2.ROTATE_180)
+            img=cv2.flip(img,1)
+            msg = self.bridge.cv2_to_imgmsg(img, "rgba8")
+            #self.get_logger().info("Image shape "+str(img.shape))
+            msg.header.stamp.sec=self.seconds;
+            msg.header.stamp.nanosec=self.nanoseconds;
+            #self.get_logger().info("Camera time2: " +str( self.seconds + self.nanoseconds*1e-9))
+            #print("Camera time: " +str( self.seconds + self.nanoseconds*1e-9))
+            self.pub_image2.publish(msg)
 
     def publish_lidar(self):
         if(self.lidar):
@@ -596,6 +685,7 @@ class SimulationNode(Node):
 
 
 def main(args=None):
+    time.sleep(12)
     rclpy.init(args=args)
 
     term_condition = Future()

@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.8)
 project(final_project)
 
+if (NOT CMAKE_CXX_STANDARD)
+    set(CMAKE_CXX_STANDARD 17)
+endif()
+
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
@@ -11,7 +15,8 @@ find_package(ament_cmake_python REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclpy REQUIRED)
 find_package(custom_msgs REQUIRED)
-find_package(final_project_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(cv_bridge REQUIRED)
 
 find_package(OpenCV 4.4 QUIET)
 if(NOT OpenCV_FOUND)
@@ -48,20 +53,21 @@ ament_python_install_package(${PROJECT_NAME})
 
 #include_directories(include ${rclcpp_INCLUDE_DIRS})
 #link_directories(${rclcpp_LIBRARY_DIRS})
-
-add_executable(talker src/publisher_member_function.cpp)
-ament_target_dependencies(talker rclcpp final_project_msgs)         # CHANGE
-
-add_executable(listener src/subscriber_member_function.cpp)
-target_link_libraries(listener
+add_executable(slam_node_stereo src/slam_node_stereo.cpp)
+target_link_libraries(slam_node_stereo
 ${LIBS}
 )
+ament_target_dependencies(slam_node_stereo rclcpp sensor_msgs cv_bridge)     # CHANGE
 
-ament_target_dependencies(listener rclcpp final_project_msgs)     # CHANGE
+add_executable(slam_node_mono src/slam_node_mono.cpp)
+target_link_libraries(slam_node_mono
+${LIBS}
+)
+ament_target_dependencies(slam_node_mono rclcpp sensor_msgs cv_bridge)     # CHANGE
 
 install(TARGETS
-  talker
-  listener
+  slam_node_stereo
+  slam_node_mono
   DESTINATION lib/${PROJECT_NAME})
 
 install(PROGRAMS
